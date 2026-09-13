@@ -1,0 +1,3 @@
+# Програма використовує лише стандартну бібліотеку Python (tkinter).
+# Для збірки exe потрібен PyInstaller:
+pyinstaller>=6.0
