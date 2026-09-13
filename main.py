@@ -1,6 +1,6 @@
-"""Точка входу H264Converter."""
+"""Точка входу FFMpegGuiConverter."""
 
-from h264conv.gui.app import run
+from ffmpeggui.gui.app import run
 
 if __name__ == "__main__":
     run()

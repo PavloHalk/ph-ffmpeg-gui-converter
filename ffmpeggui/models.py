@@ -15,7 +15,7 @@ X264_PRESETS = [
     ("faster", "швидше за стандарт"),
     ("fast", "трохи швидше за стандарт"),
     ("medium", "стандарт ffmpeg — баланс"),
-    ("slow", "повільніше, менший файл (як у старому скрипті)"),
+    ("slow", "повільніше, менший файл"),
     ("slower", "ще повільніше, ще менший файл"),
     ("veryslow", "найповільніше, найменший файл"),
 ]
@@ -136,6 +136,13 @@ def _new_id() -> str:
     return uuid.uuid4().hex
 
 
+def _number(d: dict, key: str) -> float:
+    try:
+        return float(d.get(key, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 @dataclass
 class FileItem:
     src: str
@@ -144,6 +151,11 @@ class FileItem:
     progress: float = 0.0          # 0..1
     out_path: str = ""
     message: str = ""
+    duration: float = 0.0          # тривалість відео в секундах (з ffprobe)
+    started_at: float = 0.0        # коли почалась конвертація (time.time())
+    finished_at: float = 0.0       # коли завершилась
+    fps: float = 0.0               # кадрів за секунду обробки
+    speed: float = 0.0             # у скільки разів швидше за реальний час
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -154,9 +166,14 @@ class FileItem:
             src=d.get("src", ""),
             id=d.get("id") or _new_id(),
             status=d.get("status", FILE_PENDING) if d.get("status") in FILE_STATUS_LABELS else FILE_PENDING,
-            progress=float(d.get("progress", 0.0) or 0.0),
+            progress=_number(d, "progress"),
             out_path=d.get("out_path", ""),
             message=d.get("message", ""),
+            duration=_number(d, "duration"),
+            started_at=_number(d, "started_at"),
+            finished_at=_number(d, "finished_at"),
+            fps=_number(d, "fps"),
+            speed=_number(d, "speed"),
         )
 
 
@@ -169,6 +186,9 @@ class Task:
     settings: ConvSettings = field(default_factory=ConvSettings)
     id: str = field(default_factory=_new_id)
     status: str = TASK_IDLE
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    preset_name: str = ""   # з якого пресету взяті налаштування (для позначки «(змінено)»)
 
     @property
     def is_active(self) -> bool:
@@ -196,6 +216,9 @@ class Task:
             "status": self.status,
             "out_dir": self.out_dir,
             "prefix": self.prefix,
+            "preset_name": self.preset_name,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
             "settings": self.settings.to_dict(),
             "files": [f.to_dict() for f in self.files],
         }
@@ -208,9 +231,78 @@ class Task:
             status=d.get("status", TASK_IDLE) if d.get("status") in TASK_STATUS_LABELS else TASK_IDLE,
             out_dir=d.get("out_dir", ""),
             prefix=d.get("prefix", ""),
+            preset_name=d.get("preset_name", ""),
+            started_at=_number(d, "started_at"),
+            finished_at=_number(d, "finished_at"),
             settings=ConvSettings.from_dict(d.get("settings")),
             files=[FileItem.from_dict(x) for x in d.get("files", [])],
         )
+
+
+def effective_settings(s: ConvSettings) -> dict:
+    """Лише ті налаштування, які реально впливають на результат.
+
+    Потрібно, щоб порівняння з пресетом не спрацьовувало через значення полів,
+    які зараз вимкнені (наприклад ширину, коли роздільність лишається як є).
+    """
+    d = s.to_dict()
+    if s.res_mode != "custom":
+        for key in ("width", "height", "res_master"):
+            d.pop(key, None)
+    elif s.res_master == "width":
+        d.pop("height", None)
+    else:
+        d.pop("width", None)
+    if s.fps_mode != "custom":
+        d.pop("fps", None)
+    if s.audio_codec not in ("aac", "mp3"):
+        d.pop("audio_bitrate", None)
+        d.pop("audio_bitrate_mode", None)
+    elif s.audio_bitrate_mode != "custom":
+        d.pop("audio_bitrate", None)
+    if s.keyint == 0:
+        d.pop("min_keyint", None)
+    if not s.faststart or s.container not in ("mp4", "mov"):
+        d.pop("faststart", None)
+    return d
+
+
+@dataclass
+class QueueStats:
+    """Стан усієї черги — незалежно від того, що зараз запущено."""
+
+    total: int = 0          # усього файлів у всіх завданнях
+    done: int = 0           # успішно сконвертовано
+    errors: int = 0         # завершились помилкою
+    running: int = 0        # конвертуються просто зараз
+    fraction: float = 0.0   # 0..1 — частка опрацьованого
+
+    @property
+    def processed(self) -> int:
+        return self.done + self.errors
+
+    @property
+    def percent(self) -> float:
+        return self.fraction * 100.0
+
+
+def queue_stats(tasks: list[Task]) -> QueueStats:
+    """Прогрес усієї черги: враховуються всі завдання списку, а не лише запущені."""
+    stats = QueueStats()
+    partial = 0.0
+    for task in tasks:
+        for f in task.files:
+            stats.total += 1
+            if f.status == FILE_DONE:
+                stats.done += 1
+            elif f.status == FILE_ERROR:
+                stats.errors += 1
+            elif f.status == FILE_RUNNING:
+                stats.running += 1
+                partial += f.progress
+    if stats.total:
+        stats.fraction = (stats.processed + partial) / stats.total
+    return stats
 
 
 def _norm(path: str) -> str:

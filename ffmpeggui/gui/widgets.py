@@ -5,6 +5,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from ..i18n import t
+
 HINT_COLOR = "#555555"
 
 
@@ -143,5 +145,5 @@ class Collapsible(ttk.Frame):
             self.header.configure(text=f"▾  {self.title}")
             self.body.pack(fill="x")
         else:
-            self.header.configure(text=f"▸  {self.title}  (натисніть, щоб розгорнути)")
+            self.header.configure(text=f"▸  {self.title}  " + t("(натисніть, щоб розгорнути)"))
             self.body.pack_forget()

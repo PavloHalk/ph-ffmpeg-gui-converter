@@ -1,26 +1,65 @@
-# H264Converter
+# FFMpegGuiConverter
 
-Віконна програма (Python 3.11 + Tkinter) для конвертації відео у H.264 за допомогою `ffmpeg`.
-Замінює PowerShell-скрипт: черги завдань, вибір окремих файлів і кількох тек, налаштування якості,
-пресети, прогрес по кожному файлу, журнал помилок.
+A small Windows desktop app (Python 3.11 + Tkinter) that converts video files to **H.264**
+using `ffmpeg`. It replaces a hand-written PowerShell script with a queue of tasks, per-file
+progress, quality presets and an error log.
 
-## Запуск з вихідних кодів
+The interface is bilingual: **Ukrainian and English**, switchable in *Settings → Interface language*.
+
+![Application icon](assets/app.png)
+
+## Features
+
+- **Task queue.** A task is a list of source files plus an output folder, a name prefix and
+  quality settings. Tasks are processed one after another; every task can also be started,
+  stopped, edited, reordered or removed on its own.
+- **Free choice of files.** Add individual files (no extension filter — anything `ffmpeg` can
+  read) or whole folders, optionally including subfolders.
+- **Quality settings.** CRF, x264 preset, resolution (keep the source or set width *or* height
+  and let the other side follow the aspect ratio of each file), frame rate, audio codec
+  (AAC, MP3, copy, none) and audio bitrate.
+- **Advanced settings** with an explanation under every field: keyframe interval
+  (`keyint` / `min-keyint`), pixel format (`pix_fmt`), tuning, container (MP4/MOV/MKV),
+  `+faststart` and free-form extra ffmpeg arguments.
+- **Named presets** for all quality settings, stored as JSON.
+- **Progress with numbers:** percentage per file and per task, elapsed time, estimated time
+  remaining and the current encoding speed in frames per second. The overall progress of the
+  whole queue is shown in the toolbar and in the window title.
+- **Parallel conversion.** By default files are converted strictly one after another; the
+  "Parallel processes" counter allows several ffmpeg processes at once and may be changed while
+  the queue is running.
+- **Robust error handling.** A file that fails is marked as failed, the reason goes to the log
+  and the queue continues with the next file.
+- **Persistent queue.** Tasks, their files and statuses survive a restart. Tasks that were
+  converting when the app was closed come back as *unfinished* and are never resumed silently.
+- **Collapsible log** that turns red when an error is written, and can be saved to a `.log` file.
+
+## Requirements
+
+- Windows
+- Python 3.11 (only when running from source; the built `.exe` needs nothing installed)
+- `ffmpeg` — see below, the app can download it for you
+
+No third-party Python packages are needed to run the app: everything is standard library
+(Tkinter). Pillow is only needed to regenerate the icon, PyInstaller only to build the `.exe`.
+
+## Running from source
 
 ```bash
 python main.py
 ```
 
-Зовнішніх залежностей немає — лише стандартна бібліотека.
-
 ## ffmpeg
 
-Програма шукає `ffmpeg.exe` і `ffprobe.exe` **лише** в теці `bin` поруч із собою
-(`bin\ffmpeg.exe`, `bin\ffprobe.exe`) і завжди викликає їх за повним шляхом.
-Якщо їх немає — при старті пропонує завантажити статичну збірку (gyan.dev, резервно — GitHub BtbN)
-і розпакувати в `bin`. PATH і реєстр не змінюються, права адміністратора не потрібні.
-Якщо завантаження неможливе — показується інструкція для ручного встановлення.
+The app looks for `ffmpeg.exe` and `ffprobe.exe` **only** in the `bin` folder next to itself
+(`bin\ffmpeg.exe`, `bin\ffprobe.exe`) and always calls them by full path.
 
-## Збірка exe
+If they are missing, it offers to download a static build automatically (gyan.dev, with GitHub
+BtbN as a fallback) and unpacks just those two executables into `bin`. The system `PATH` and the
+registry are never touched, so no administrator rights are required. If the download is not
+possible, the app shows step-by-step instructions for installing ffmpeg manually.
+
+## Building the .exe
 
 ```bash
 python -m pip install -r requirements-dev.txt
@@ -30,43 +69,68 @@ python -m pip install -r requirements-dev.txt
 python build.py
 ```
 
-Результат — `dist\H264Converter.exe`. Версія, автор і опис (властивості файлу в Провіднику)
-беруться з `h264conv/version.py` — це єдине місце, де треба змінювати номер версії.
-`build.py` генерує з нього `version.txt` у форматі `VSVersionInfo` для PyInstaller
-(`python build.py --version-only` — лише згенерувати файл).
+The result is `dist\FFMpegGuiConverter.exe` (single file, no console window).
 
-## Де зберігаються дані
+`build.py` generates two things from `ffmpeggui/version.py`, which is the single source of truth
+for the version number:
 
-`%APPDATA%\H264Converter\`:
+- `version.txt` — a PyInstaller version-file (`VSVersionInfo` / `StringFileInfo` / `VarFileInfo`)
+  that fills in the properties Windows Explorer shows for the executable;
+- `ffmpeggui/_build_date.py` — the build timestamp displayed in *Help → About*.
 
-| Файл | Вміст |
+Use `python build.py --version-only` to regenerate those files without building.
+
+The application icon is generated by `python tools/make_icon.py` (requires Pillow) into
+`assets/app.ico`.
+
+## Where data is stored
+
+`%APPDATA%\FFMpegGuiConverter\`:
+
+| File | Contents |
 |---|---|
-| `presets.json` | іменовані пресети налаштувань якості |
-| `queue.json` | список завдань зі статусами, файлами й налаштуваннями |
-| `settings.json` | кількість паралельних процесів, розмір вікна, останні теки |
-| `h264converter.log` | журнал подій і помилок |
+| `presets.json` | named quality presets |
+| `queue.json` | tasks with their files, settings and statuses |
+| `settings.json` | language, parallel processes, window geometry, recent folders |
+| `ffmpeggui.log` | log of events and errors |
 
-## Поведінка
+Settings from the previous name of the app (`%APPDATA%\H264Converter`) are migrated
+automatically on first run.
 
-- Завдання й файли всередині них обробляються по черзі; поле «Паралельних процесів» (типово 1)
-  дозволяє конвертувати кілька файлів одночасно.
-- «Стоп» миттєво завершує процес(и) ffmpeg; недописаний вихідний файл видаляється.
-- Нове завдання, додане під час конвертації, стає в кінець черги й обробляється автоматично.
-- Помилка одного файлу не зупиняє чергу: файл позначається «Помилка», причина — у журналі.
-- Після перезапуску завдання, що конвертувались, показуються як «Не завершено» і самі не стартують.
-- Однакові імена вихідних файлів в одному завданні отримують суфікс `_000`, `_001`, …
-- Повторний старт завдання конвертує лише незавершені файли; якщо все готово — пропонує
-  сконвертувати заново.
+## Behaviour worth knowing
 
-## Структура
+- **Stopping** kills the running ffmpeg processes immediately; the partially written output file
+  is deleted. Progress of the current file is lost by design — there is no pause/resume.
+- **Changing the number of parallel processes** while converting is safe: increasing it starts
+  additional files at once, decreasing it lets the running files finish and simply starts no new
+  ones until the count drops.
+- **Adding a task while the queue is running** puts it at the end of the queue and it is picked
+  up automatically.
+- **Output names** are `prefix + source name + container extension`. If two files of one task
+  would get the same name (for example when they come from different folders), the suffix
+  `_000`, `_001`, `_002` … is appended.
+- **Restarting a task** converts only the files that are not done yet; if everything is already
+  converted, the app asks whether to convert it all again.
+
+## Project layout
 
 ```
-main.py                 точка входу
-build.py                генерація version.txt + PyInstaller
-h264conv/version.py     версія та метадані (single source of truth)
-h264conv/models.py      налаштування, файли, завдання, імена вихідних файлів
-h264conv/ffmpeg_tools.py пошук/завантаження ffmpeg, ffprobe, побудова команди, прогрес
-h264conv/engine.py      черга та паралельні процеси
-h264conv/store.py       json: черга, пресети, налаштування
-h264conv/gui/           вікна Tkinter
+main.py                     entry point
+build.py                    version.txt + build date + PyInstaller
+tools/make_icon.py          generates assets/app.ico
+tools/check_i18n.py         checks that every UI string is translated
+ffmpeggui/version.py        version, build metadata (single source of truth)
+ffmpeggui/models.py         settings, files, tasks, output naming, queue statistics
+ffmpeggui/ffmpeg_tools.py   locating/downloading ffmpeg, ffprobe, command building, progress
+ffmpeggui/engine.py         the queue and parallel processes
+ffmpeggui/timing.py         elapsed time and time-remaining estimates
+ffmpeggui/store.py          JSON storage: queue, presets, settings
+ffmpeggui/i18n.py           language switching
+ffmpeggui/translations_en.py English translations (keys are the Ukrainian source strings)
+ffmpeggui/gui/              Tkinter windows
 ```
+
+## License
+
+Not decided yet. `ffmpeg` itself is distributed under its own license and is not bundled with
+this project.

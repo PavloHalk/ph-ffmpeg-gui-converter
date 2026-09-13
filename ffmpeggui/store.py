@@ -15,7 +15,7 @@ from .models import (
     Task,
 )
 
-DEFAULT_PRESET_NAME = "Стандарт (CRF 17, slow — як у скрипті)"
+DEFAULT_PRESET_NAME = "Стандарт (CRF 17, slow)"
 
 
 def _read_json(path: str, default):
@@ -64,12 +64,14 @@ def save_tasks(tasks: list[Task]) -> None:
 
 DEFAULT_SETTINGS = {
     "max_parallel": 1,
+    "language": "uk",
     "geometry": "",
     "last_preset": DEFAULT_PRESET_NAME,
     "last_dir": "",
     "last_out_dir": "",
     "default_prefix": "h264_",
     "recursive_scan": False,
+    "log_collapsed": False,
 }
 
 

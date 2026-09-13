@@ -7,3 +7,5 @@ bin/
 working_assets/
 *.spec
 version.txt
+ffmpeggui/_build_date.py
+assets/icon_preview.png

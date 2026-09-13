@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import paths
+from .i18n import t
 from .models import ConvSettings
 from .version import APP_NAME, __version__
 
@@ -70,39 +71,39 @@ def download_ffmpeg(
     errors = []
     for name, url in DOWNLOAD_SOURCES:
         if cancel.is_set():
-            raise RuntimeError("Завантаження скасовано.")
+            raise RuntimeError(t("Завантаження скасовано."))
         fd, tmp_zip = tempfile.mkstemp(suffix=".zip", prefix="ffmpeg_")
         os.close(fd)
         try:
-            on_status(f"Завантаження з {name}…")
+            on_status(t("Завантаження з {source}…").format(source=name))
             req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{__version__}"})
             with urllib.request.urlopen(req, timeout=30) as resp, open(tmp_zip, "wb") as out:
                 total = int(resp.headers.get("Content-Length") or 0)
                 done = 0
                 while True:
                     if cancel.is_set():
-                        raise RuntimeError("Завантаження скасовано.")
+                        raise RuntimeError(t("Завантаження скасовано."))
                     chunk = resp.read(256 * 1024)
                     if not chunk:
                         break
                     out.write(chunk)
                     done += len(chunk)
                     on_progress(done, total)
-            on_status("Розпакування…")
+            on_status(t("Розпакування…"))
             _extract_binaries(tmp_zip)
             if ffmpeg_available():
                 return
-            errors.append(f"{name}: в архіві не знайдено ffmpeg.exe/ffprobe.exe")
+            errors.append(f"{name}: " + t("в архіві не знайдено ffmpeg.exe/ffprobe.exe"))
         except Exception as exc:  # noqa: BLE001 — пробуємо наступне джерело
             if cancel.is_set():
-                raise RuntimeError("Завантаження скасовано.") from exc
+                raise RuntimeError(t("Завантаження скасовано.")) from exc
             errors.append(f"{name}: {exc}")
         finally:
             try:
                 os.remove(tmp_zip)
             except OSError:
                 pass
-    raise RuntimeError("Не вдалося завантажити ffmpeg.\n" + "\n".join(errors))
+    raise RuntimeError(t("Не вдалося завантажити ffmpeg.") + "\n" + "\n".join(errors))
 
 
 def _extract_binaries(zip_path: str) -> None:
@@ -154,13 +155,13 @@ def probe(path: str) -> ProbeInfo:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", creationflags=CREATE_NO_WINDOW, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ProbeError(f"Не вдалося запустити ffprobe: {exc}") from exc
+        raise ProbeError(t("Не вдалося запустити ffprobe: {error}").format(error=exc)) from exc
     if r.returncode != 0:
-        raise ProbeError((r.stderr or "").strip() or "ffprobe не зміг прочитати файл")
+        raise ProbeError((r.stderr or "").strip() or t("ffprobe не зміг прочитати файл"))
     try:
         data = json.loads(r.stdout or "{}")
     except ValueError as exc:
-        raise ProbeError("Некоректна відповідь ffprobe") from exc
+        raise ProbeError(t("Некоректна відповідь ffprobe")) from exc
 
     info = ProbeInfo()
     fmt = data.get("format", {})
@@ -187,6 +188,14 @@ def probe(path: str) -> ProbeInfo:
             info.has_audio = True
             info.audio_bitrate = int(_parse_rate(str(st.get("bit_rate", "0"))))
     return info
+
+
+def probe_duration(path: str) -> float:
+    """Лише тривалість (для оцінки часу до завершення). 0, якщо не вдалося."""
+    try:
+        return probe(path).duration
+    except (ProbeError, OSError):
+        return 0.0
 
 
 # ---------------------------------------------------------------- команда
@@ -247,8 +256,18 @@ def start_process(cmd: list[str]) -> subprocess.Popen:
     )
 
 
+@dataclass
+class ProgressUpdate:
+    """Те, що ffmpeg повідомляє про хід конвертації одного файлу."""
+
+    fraction: float = 0.0   # 0..1 за часом відео
+    fps: float = 0.0        # кадрів за секунду обробки
+    speed: float = 0.0      # у скільки разів швидше за реальний час
+    frame: int = 0
+
+
 def watch_process(proc: subprocess.Popen, duration: float,
-                  on_progress: Callable[[float], None]) -> tuple[int, str]:
+                  on_progress: Callable[[ProgressUpdate], None]) -> tuple[int, str]:
     """Читає -progress з stdout, повертає (код завершення, хвіст stderr)."""
     tail: collections.deque[str] = collections.deque(maxlen=40)
 
@@ -258,21 +277,57 @@ def watch_process(proc: subprocess.Popen, duration: float,
             if line:
                 tail.append(line)
 
-    t = threading.Thread(target=read_stderr, daemon=True)
-    t.start()
+    reader = threading.Thread(target=read_stderr, daemon=True)
+    reader.start()
 
+    state = ProgressUpdate()
+    reported_fps = 0.0
+    measured_fps = 0.0
+    last_frame = 0
+    last_frame_time = time.monotonic()
     last_sent = 0.0
+
     for line in proc.stdout:
         key, _, value = line.strip().partition("=")
-        if key in ("out_time_us", "out_time_ms") and duration > 0:
+        value = value.strip()
+        if key == "frame":
+            try:
+                frame = int(value)
+            except ValueError:
+                continue
+            state.frame = frame
+            now = time.monotonic()
+            gap = now - last_frame_time
+            if gap >= 0.5 and frame > last_frame:
+                instant = (frame - last_frame) / gap
+                # згладжуємо, щоб показник не стрибав
+                measured_fps = instant if measured_fps <= 0 else measured_fps * 0.6 + instant * 0.4
+                last_frame, last_frame_time = frame, now
+        elif key == "fps":
+            try:
+                reported_fps = float(value)
+            except ValueError:
+                reported_fps = 0.0
+        elif key == "speed":
+            try:
+                state.speed = float(value.rstrip("x").strip())
+            except ValueError:
+                pass
+        elif key in ("out_time_us", "out_time_ms"):
             try:
                 seconds = int(value) / 1_000_000
             except ValueError:
                 continue
+            if duration > 0:
+                state.fraction = max(0.0, min(1.0, seconds / duration))
+        elif key == "progress":
+            # кінець блоку значень — саме тут маємо узгоджений стан
+            state.fps = measured_fps or reported_fps
             now = time.monotonic()
-            if now - last_sent >= 0.25:
+            if now - last_sent >= 0.25 or value == "end":
                 last_sent = now
-                on_progress(max(0.0, min(1.0, seconds / duration)))
+                on_progress(ProgressUpdate(state.fraction, state.fps, state.speed, state.frame))
+
     rc = proc.wait()
-    t.join(timeout=2)
+    reader.join(timeout=2)
     return rc, "\n".join(list(tail)[-6:])
