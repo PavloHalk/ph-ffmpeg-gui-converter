@@ -90,10 +90,33 @@ class ScrollableFrame(ttk.Frame):
             ScrollableFrame._wheel_bound = True
 
     def _on_inner_configure(self, _event=None):
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.sync()
 
     def _on_canvas_configure(self, event):
         self.canvas.itemconfigure(self._win, width=event.width)
+        self.sync()
+
+    def sync(self, flush: bool = False) -> None:
+        """Підганяє область прокрутки під вміст і не дає огляду лишитися за його межами.
+
+        Коли рядки видаляються, Tk не завжди надсилає <Configure> для внутрішнього
+        фрейму — тоді область прокрутки лишається старою, а огляд «зависає» нижче
+        вмісту. Тому після перебудови списку метод викликається явно (flush=True).
+        """
+        if flush:
+            self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if not bbox:
+            return
+        content_h = max(0, bbox[3] - bbox[1])
+        self.canvas.configure(scrollregion=(0, 0, bbox[2], content_h))
+        view_h = self.canvas.winfo_height()
+        top = self.canvas.canvasy(0)
+        if content_h <= view_h:
+            if top != 0:
+                self.canvas.yview_moveto(0)
+        elif top > content_h - view_h:
+            self.canvas.yview_moveto(1.0)
 
     def scroll(self, delta: int) -> None:
         top, bottom = self.canvas.yview()
@@ -103,8 +126,10 @@ class ScrollableFrame(ttk.Frame):
         self.canvas.yview_scroll(steps * 2, "units")
 
     def scroll_to_bottom(self) -> None:
-        self.canvas.update_idletasks()
-        self.canvas.yview_moveto(1.0)
+        self.sync(flush=True)
+        top, bottom = self.canvas.yview()
+        if not (top <= 0 and bottom >= 1):
+            self.canvas.yview_moveto(1.0)
 
     @staticmethod
     def _on_wheel(event):

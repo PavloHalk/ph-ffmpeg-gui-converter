@@ -3,7 +3,8 @@
 build.py генерує з цих значень version.txt для PyInstaller.
 """
 
-__version__ = "1.1.0"
+# Версію не змінювати без явної вказівки автора — лишається 1.0.0.
+__version__ = "1.0.0"
 VERSION_DATE = "2026-09-13"
 
 APP_NAME = "FFMpegGuiConverter"

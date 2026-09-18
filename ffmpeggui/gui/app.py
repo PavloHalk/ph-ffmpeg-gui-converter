@@ -157,6 +157,7 @@ class TaskRow(tk.Frame):
                 self.tree.master.destroy()
                 self.tree = None
         self.refresh()
+        self.app.list.sync(flush=True)
 
     def _show_files(self):
         holder = tk.Frame(self.files_frame)
@@ -484,6 +485,8 @@ class MainWindow:
             row = TaskRow(self.list.inner, self, task, i, len(self.tasks), task.id in self.expanded)
             row.pack(fill="x", padx=2, pady=2)
             self.rows[task.id] = row
+        # Список міг зменшитися — інакше прокрутка лишиться там, де вмісту вже немає.
+        self.list.sync(flush=True)
 
     # ================================================================ журнал
 
