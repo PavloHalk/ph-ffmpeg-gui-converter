@@ -76,7 +76,10 @@ for the version number:
 
 - `version.txt` — a PyInstaller version-file (`VSVersionInfo` / `StringFileInfo` / `VarFileInfo`)
   that fills in the properties Windows Explorer shows for the executable;
-- `ffmpeggui/_build_date.py` — the build timestamp displayed in *Help → About*.
+- `ffmpeggui/_build_date.py` — the build timestamp displayed in *Help → About*;
+- `build/FFMpegGuiConverter.spec` — the PyInstaller spec. It leaves out Tcl/Tk data the app
+  never uses (time zones and message catalogs, see `EXCLUDED_DATA` in `build.py`). A single-file
+  exe unpacks every bundled file on each launch, so this cuts start-up time noticeably.
 
 Use `python build.py --version-only` to regenerate those files without building.
 

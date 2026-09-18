@@ -2,7 +2,8 @@
 
 1. Генерує version.txt (формат VSVersionInfo для PyInstaller) з ffmpeggui/version.py.
 2. Записує дату збірки у ffmpeggui/_build_date.py (показується у вікні «Про програму»).
-3. Запускає PyInstaller.
+3. Генерує build/FFMpegGuiConverter.spec — один exe без непотрібних файлів Tcl/Tk
+   (див. EXCLUDED_DATA) — і запускає за ним PyInstaller.
 
 Використання:
     python build.py                — згенерувати version.txt і зібрати exe
@@ -92,6 +93,57 @@ def write_version_file(build_date: str) -> Path:
     return path
 
 
+# Файли даних Tcl/Tk, які програмі не потрібні.
+# PyInstaller кладе бібліотеку Tcl у збірку цілком, бо не знає, що інтерпретатор Tcl
+# завантажить під час роботи. А exe-«один файл» розпаковує кожен такий файл у %TEMP%
+# при КОЖНОМУ запуску, тож зайві файли прямо сповільнюють старт (заміряно: 2,8 с -> 1,8 с).
+EXCLUDED_DATA = (
+    "_tcl_data/tzdata/",  # ~610 файлів часових поясів Tcl — час у програмі рахує Python, не Tcl
+    "_tcl_data/msgs/",    # ~130 перекладів повідомлень Tcl (назви місяців для clock format)
+    "_tk_data/msgs/",     # переклади вбудованих діалогів Tk — на Windows діалоги системні
+)
+
+SPEC_TEMPLATE = '''# Згенеровано build.py — не редагуйте вручну.
+a = Analysis(
+    [{main!r}],
+    pathex=[{root!r}],
+    datas=[({icon!r}, "assets")],
+    hiddenimports=["ffmpeggui._build_date"],
+)
+
+EXCLUDED_DATA = {excluded!r}
+before = len(a.datas)
+a.datas = [d for d in a.datas
+           if not any(d[0].replace("\\\\", "/").startswith(prefix) for prefix in EXCLUDED_DATA)]
+print(f"Виключено непотрібних файлів даних Tcl/Tk: {{before - len(a.datas)}} з {{before}}")
+
+pyz = PYZ(a.pure)
+exe = EXE(
+    pyz, a.scripts, a.binaries, a.datas, [],
+    name={name!r},
+    console=False,
+    upx=False,
+    icon={icon!r},
+    version={version_file!r},
+)
+'''
+
+
+def write_spec(version_file: Path, icon: Path) -> Path:
+    """Spec-файл для PyInstaller: один exe без непотрібних файлів Tcl/Tk."""
+    spec = ROOT / "build" / f"{v.APP_NAME}.spec"
+    spec.parent.mkdir(exist_ok=True)
+    spec.write_text(SPEC_TEMPLATE.format(
+        main=(ROOT / "main.py").as_posix(),
+        root=ROOT.as_posix(),
+        icon=icon.as_posix(),
+        excluded=EXCLUDED_DATA,
+        name=v.APP_NAME,
+        version_file=version_file.as_posix(),
+    ), encoding="utf-8")
+    return spec
+
+
 def build() -> int:
     icon = ROOT / "assets" / "app.ico"
     if not icon.is_file():
@@ -100,15 +152,13 @@ def build() -> int:
 
     build_date = write_build_date()
     version_file = write_version_file(build_date)
+    spec = write_spec(version_file, icon)
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--noconfirm", "--clean", "--onefile", "--windowed",
-        "--name", v.APP_NAME,
-        "--version-file", str(version_file),
-        "--hidden-import", "ffmpeggui._build_date",
-        "--icon", str(icon),
-        "--add-data", f"{icon}{';' if sys.platform == 'win32' else ':'}assets",
-        str(ROOT / "main.py"),
+        "--noconfirm", "--clean",
+        "--distpath", str(ROOT / "dist"),
+        "--workpath", str(ROOT / "build"),
+        str(spec),
     ]
     print(" ".join(cmd))
     rc = subprocess.call(cmd, cwd=ROOT)

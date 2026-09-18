@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import filedialog
@@ -286,6 +287,8 @@ class MainWindow:
         self.presets = store.PresetStore()
         self.tasks: list[Task] = store.load_tasks()
         self.expanded: set[str] = set()
+        self._ffmpeg_version: str | None = None
+        self._ffmpeg_check_seq = 0
         self.rows: dict[str, TaskRow] = {}
         self.log_entries: list[tuple[datetime, str, str]] = []
         self.error_count = 0
@@ -799,19 +802,50 @@ class MainWindow:
 
     # ================================================================ ffmpeg
 
-    def _update_ffmpeg_status(self):
-        if ffmpeg_tools.ffmpeg_available():
-            version = ffmpeg_tools.ffmpeg_version() or "ffmpeg"
-            self.lbl_ffmpeg.configure(text=f"ffmpeg: {version}  ({paths.bin_dir()})", fg="#000000")
-        else:
+    def _update_ffmpeg_status(self, recheck: bool = False):
+        """Рядок стану з версією ffmpeg.
+
+        Щоб дізнатися версію, треба запустити ffmpeg.exe (~0,25 с) — робимо це у фоні,
+        щоб не затримувати відкриття вікна. Результат запам'ятовуємо.
+        """
+        if not ffmpeg_tools.ffmpeg_available():
+            self._ffmpeg_version = None
             self.lbl_ffmpeg.configure(
                 text=t("ffmpeg не знайдено в {path} — конвертація недоступна").format(path=paths.bin_dir()),
                 fg=ERROR_COLOR)
+            return
+        if self._ffmpeg_version and not recheck:
+            self._show_ffmpeg_version()
+            return
+        self.lbl_ffmpeg.configure(text=f"ffmpeg: {paths.bin_dir()}", fg="#000000")
+        self._ffmpeg_check_seq += 1
+        seq = self._ffmpeg_check_seq
+        result: dict[str, str] = {}
+        threading.Thread(target=lambda: result.update(version=ffmpeg_tools.ffmpeg_version()),
+                         daemon=True).start()
+
+        def wait():
+            if seq != self._ffmpeg_check_seq:
+                return  # уже запущено новішу перевірку
+            if "version" not in result:
+                self.root.after(50, wait)
+                return
+            self._ffmpeg_version = result["version"] or "ffmpeg"
+            self._show_ffmpeg_version()
+
+        self.root.after(50, wait)
+
+    def _show_ffmpeg_version(self):
+        try:
+            self.lbl_ffmpeg.configure(text=f"ffmpeg: {self._ffmpeg_version}  ({paths.bin_dir()})",
+                                      fg="#000000")
+        except tk.TclError:
+            pass  # рядок стану могли перебудувати (зміна мови)
 
     def _startup_ffmpeg_check(self):
         if not ffmpeg_tools.ffmpeg_available():
             ensure_ffmpeg(self.root, self.log)
-            self._update_ffmpeg_status()
+            self._update_ffmpeg_status(recheck=True)
             if ffmpeg_tools.ffmpeg_available():
                 self.engine.prefetch_durations()
 
@@ -819,7 +853,7 @@ class MainWindow:
         if ffmpeg_tools.ffmpeg_available():
             return True
         ok = ensure_ffmpeg(self.root, self.log, reason=t("Для конвертування потрібен ffmpeg."))
-        self._update_ffmpeg_status()
+        self._update_ffmpeg_status(recheck=True)
         return ok
 
     def _check_ffmpeg_manual(self):
@@ -830,7 +864,7 @@ class MainWindow:
                                 parent=self.root)
         else:
             ensure_ffmpeg(self.root, self.log)
-        self._update_ffmpeg_status()
+        self._update_ffmpeg_status(recheck=True)
 
     def _open_bin(self):
         os.makedirs(paths.bin_dir(), exist_ok=True)
