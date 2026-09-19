@@ -309,16 +309,26 @@ def _norm(path: str) -> str:
     return os.path.normcase(os.path.abspath(path))
 
 
-def assign_output_paths(task: Task) -> None:
+def reserved_outputs(tasks: list[Task], exclude: Task) -> set[str]:
+    """Імена результатів, уже закріплені за іншими завданнями списку.
+
+    Потрібно, щоб два завдання з однією текою результату не перезаписали файли
+    одне одного (ffmpeg запускається з -y).
+    """
+    return {_norm(f.out_path) for t in tasks if t is not exclude
+            for f in t.files if f.out_path}
+
+
+def assign_output_paths(task: Task, reserved: set[str] | None = None) -> None:
     """Розраховує імена вихідних файлів.
 
     Ім'я = префікс + ім'я вихідного файлу + розширення контейнера. Якщо ім'я вже
-    зайняте іншим файлом цього завдання (або збігається з будь-яким вихідним
-    файлом), додається суфікс _000, _001, … Файли, які вже сконвертовано,
-    зберігають своє ім'я.
+    зайняте іншим файлом цього завдання, файлом іншого завдання (reserved) або
+    збігається з будь-яким вихідним файлом, додається суфікс _000, _001, …
+    Файли, які вже сконвертовано, зберігають своє ім'я.
     """
     ext = "." + (task.settings.container or "mp4")
-    forbidden = {_norm(f.src) for f in task.files}
+    forbidden = {_norm(f.src) for f in task.files} | (reserved or set())
     used: set[str] = set()
     for f in task.files:
         if f.status == FILE_DONE and f.out_path:

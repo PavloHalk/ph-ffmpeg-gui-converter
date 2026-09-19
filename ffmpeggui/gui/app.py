@@ -29,13 +29,14 @@ from ..models import (
     Task,
     assign_output_paths,
     queue_stats,
+    reserved_outputs,
 )
 from ..timing import (file_elapsed, file_eta, format_duration, queue_eta, queue_progress,
                       task_elapsed, task_eta)
 from ..version import APP_NAME, APP_TITLE, AUTHOR, VERSION_DATE, __version__
 from .ffmpeg_setup import ensure_ffmpeg
 from .task_dialog import TaskDialog
-from .widgets import ScrollableFrame, ToolTip
+from .widgets import ScrollableFrame, ToolTip, safe_geometry
 
 STATUS_COLORS = {
     TASK_IDLE: "#444444",
@@ -49,6 +50,7 @@ STATUS_COLORS = {
 ERROR_COLOR = "#c00000"
 ERROR_BG = "#ffe8e8"
 MAX_LOG_LINES = 5000
+LOG_FILE_LIMIT = 1024 * 1024   # журнал на диску понад 1 МБ відкладається в .old
 
 
 def shorten_path(path: str, limit: int = 46) -> str:
@@ -88,6 +90,8 @@ class TaskRow(tk.Frame):
         self.index = index
         self.expanded = expanded
         self.tree: ttk.Treeview | None = None
+        self._shown: dict[str, dict] = {}              # що вже показано у віджетах
+        self._tree_values: dict[str, tuple] = {}       # що вже показано в таблиці файлів
 
         top = tk.Frame(self)
         top.pack(fill="x")
@@ -106,7 +110,7 @@ class TaskRow(tk.Frame):
         self.lbl_sub.grid(row=1, column=1, sticky="we")
         for w in (self.lbl_title, self.lbl_sub):
             w.bind("<Double-Button-1>", lambda e: self.toggle())
-        ToolTip(self.lbl_sub, task.out_dir)
+        self.sub_tip = ToolTip(self.lbl_sub, task.out_dir)
 
         btns = tk.Frame(top)
         btns.grid(row=0, column=2, sticky="e", padx=(6, 0))
@@ -124,10 +128,7 @@ class TaskRow(tk.Frame):
         ToolTip(self.btn_down, t("Перемістити завдання на 1 позицію вниз"))
         ToolTip(self.btn_folder, t("Відкрити в Провіднику теку з готовими файлами"))
         ToolTip(self.btn_del, t("Видалити завдання зі списку (файли на диску не видаляються)"))
-        if index == 1:
-            self.btn_up.state(["disabled"])
-        if index == count:
-            self.btn_down.state(["disabled"])
+        self._set_arrows(count)
 
         metrics = tk.Frame(top)
         metrics.grid(row=2, column=1, columnspan=2, sticky="we", pady=(2, 0))
@@ -215,8 +216,11 @@ class TaskRow(tk.Frame):
     def _fill_tree(self):
         tree = self.tree
         tree.delete(*tree.get_children())
+        self._tree_values = {}
         for i, f in enumerate(self.task.files, 1):
-            tree.insert("", "end", iid=f.id, values=self._file_values(i, f), tags=self._file_tag(f))
+            values = (self._file_values(i, f), self._file_tag(f))
+            tree.insert("", "end", iid=f.id, values=values[0], tags=values[1])
+            self._tree_values[f.id] = values
         tree.configure(height=min(max(len(self.task.files), 1), 10))
 
     def _update_tree(self):
@@ -224,23 +228,52 @@ class TaskRow(tk.Frame):
         if list(tree.get_children()) != [f.id for f in self.task.files]:
             self._fill_tree()
             return
+        # Під час конвертації рядок оновлюється кілька разів на секунду —
+        # переписуємо лише ті файли, у яких щось змінилось.
         for i, f in enumerate(self.task.files, 1):
-            tree.item(f.id, values=self._file_values(i, f), tags=self._file_tag(f))
+            values = (self._file_values(i, f), self._file_tag(f))
+            if self._tree_values.get(f.id) != values:
+                tree.item(f.id, values=values[0], tags=values[1])
+                self._tree_values[f.id] = values
 
     # ------------------------------------------------------------ оновлення
+
+    def _cfg(self, widget, **options):
+        """Змінює віджет лише тоді, коли значення справді інше (refresh кличеться часто)."""
+        key = str(widget)
+        if self._shown.get(key) != options:
+            widget.configure(**options)
+            self._shown[key] = options
+
+    def _set_arrows(self, count: int):
+        self._cfg(self.btn_up, state="disabled" if self.index == 1 else "normal")
+        self._cfg(self.btn_down, state="disabled" if self.index == count else "normal")
+
+    def set_position(self, index: int, count: int):
+        """Завдання змінило місце в списку (переміщення, видалення сусіда)."""
+        self.index = index
+        self._set_arrows(count)
+        self._cfg(self.lbl_title, text=f"{self.index}. {self.task.name}")
+
+    def reload(self):
+        """Завдання відредаговано: оновити все, включно з підказкою й таблицею файлів."""
+        self.sub_tip.text = self.task.out_dir
+        if self.tree is not None:
+            self._fill_tree()
+        self.refresh()
 
     def refresh(self):
         task = self.task
         s = task.settings
-        self.btn_toggle.configure(text="−" if self.expanded else "+")
-        self.lbl_title.configure(text=f"{self.index}. {task.name}")
+        self._cfg(self.btn_toggle, text="−" if self.expanded else "+")
+        self._cfg(self.lbl_title, text=f"{self.index}. {task.name}")
         if s.res_mode == "source":
             res = t("роздільність як є")
         elif s.res_master == "width":
             res = t("ширина {value}").format(value=s.width)
         else:
             res = t("висота {value}").format(value=s.height)
-        self.lbl_sub.configure(text=t("Файлів: {count}  |  CRF {crf}, {preset}, {res}, {container}  |  → {out}").format(
+        self._cfg(self.lbl_sub, text=t("Файлів: {count}  |  CRF {crf}, {preset}, {res}, {container}  |  → {out}").format(
             count=len(task.files), crf=s.crf, preset=s.preset, res=res,
             container=s.container.upper(), out=shorten_path(task.out_dir)))
 
@@ -250,16 +283,16 @@ class TaskRow(tk.Frame):
             status += f" ({done + errors}/{len(task.files)})"
         elif task.status in (TASK_ERROR, TASK_PARTIAL):
             status = f"{status} ({errors})"
-        self.lbl_status.configure(text=status, fg=STATUS_COLORS.get(task.status, "#000000"))
+        self._cfg(self.lbl_status, text=status, fg=STATUS_COLORS.get(task.status, "#000000"))
 
         pct = task.progress() * 100
-        self.pb["value"] = pct
-        self.lbl_pct.configure(text=f"{pct:.0f}%")
-        self.lbl_time.configure(text=self._time_text())
+        self._cfg(self.pb, value=round(pct, 1))
+        self._cfg(self.lbl_pct, text=f"{pct:.0f}%")
+        self._cfg(self.lbl_time, text=self._time_text())
 
         active = task.is_active
-        self.btn_run.configure(text=t("■ Стоп") if active else t("▶ Старт"))
-        self.btn_edit.state(["disabled"] if active else ["!disabled"])
+        self._cfg(self.btn_run, text=t("■ Стоп") if active else t("▶ Старт"))
+        self._cfg(self.btn_edit, state="disabled" if active else "normal")
         if self.tree is not None:
             self._update_tree()
 
@@ -306,9 +339,10 @@ class MainWindow:
         self.v_language = tk.StringVar(value=i18n.get_language())
         self.engine = Engine(self.tasks, self.max_parallel, self._on_engine_change, self.log)
 
-        root.geometry(self.settings.get("geometry") or "1150x720")
+        root.geometry(safe_geometry(self.settings.get("geometry"), "1150x720"))
         root.minsize(980, 560)
         self._build_ui()
+        self._rotate_log_file()
 
         self.log(t("{app} {version} запущено. Налаштування та черга: {path}").format(
             app=APP_TITLE, version=__version__, path=paths.data_dir()), "info")
@@ -480,16 +514,42 @@ class MainWindow:
         self._update_ffmpeg_status()
 
     def _rebuild_rows(self):
-        for row in self.rows.values():
-            row.destroy()
-        self.rows.clear()
-        self.empty_lbl.pack_forget()
-        if not self.tasks:
-            self.empty_lbl.pack(pady=30)
+        """Приводить рядки у відповідність зі списком завдань.
+
+        Створення рядка — близько 30 мс, тож рядки не перестворюються щоразу:
+        видалені завдання прибираються, нові додаються, а при переміщенні
+        переставляється лише сам рядок.
+        """
+        ids = {task.id for task in self.tasks}
+        for task_id in [k for k in self.rows if k not in ids]:
+            self.rows.pop(task_id).destroy()
+        count = len(self.tasks)
         for i, task in enumerate(self.tasks, 1):
-            row = TaskRow(self.list.inner, self, task, i, len(self.tasks), task.id in self.expanded)
-            row.pack(fill="x", padx=2, pady=2)
-            self.rows[task.id] = row
+            row = self.rows.get(task.id)
+            if row is None:
+                self.rows[task.id] = TaskRow(self.list.inner, self, task, i, count,
+                                             task.id in self.expanded)
+            else:
+                row.set_position(i, count)
+
+        # Порядок у вікні: переставляємо лише ті рядки, що стоять не на своєму місці.
+        def packed():
+            return [w for w in self.list.inner.pack_slaves() if isinstance(w, TaskRow)]
+        current = packed()
+        for i, task in enumerate(self.tasks):
+            row = self.rows[task.id]
+            if i < len(current) and current[i] is row:
+                continue
+            if i < len(current):
+                row.pack(fill="x", padx=2, pady=2, before=current[i])
+            else:
+                row.pack(fill="x", padx=2, pady=2)
+            current = packed()
+
+        if self.tasks:
+            self.empty_lbl.pack_forget()
+        else:
+            self.empty_lbl.pack(pady=30)
         # Список міг зменшитися — інакше прокрутка лишиться там, де вмісту вже немає.
         self.list.sync(flush=True)
 
@@ -570,6 +630,17 @@ class MainWindow:
             pass
         self._update_log_header()
 
+    @staticmethod
+    def _rotate_log_file():
+        """Файл журналу не росте без меж: понад 1 МБ він стає ffmpeggui.log.old
+        (зберігається одна попередня копія), а запис починається з нового файлу."""
+        path = paths.log_file()
+        try:
+            if os.path.getsize(path) > LOG_FILE_LIMIT:
+                os.replace(path, path + ".old")
+        except OSError:
+            pass
+
     def save_log(self):
         if not self.log_entries:
             messagebox.showinfo(t("Журнал"), t("Журнал порожній."), parent=self.root)
@@ -620,11 +691,14 @@ class MainWindow:
         messagebox.showinfo(t("Паралельні процеси"), parallel_help_text(), parent=self.root)
 
     def _on_engine_change(self, task: Task, progress_only: bool):
+        # Прогрес активних завдань і так оновлює _poll кожні 150 мс —
+        # тут реагуємо лише на зміни стану (почалось, завершилось, помилка…).
+        if progress_only:
+            return
         row = self.rows.get(task.id)
         if row is not None:
             row.refresh()
-        if not progress_only:
-            self._schedule_save()
+        self._schedule_save()
 
     def _poll(self):
         try:
@@ -681,13 +755,14 @@ class MainWindow:
 
     def add_task(self):
         dlg = TaskDialog(self.root, self.presets, self.settings, None,
-                         default_name=t("Завдання {number}").format(number=len(self.tasks) + 1))
+                         default_name=t("Завдання {number}").format(number=len(self.tasks) + 1),
+                         known_out_dirs=self._output_dirs())
         self.root.wait_window(dlg)
         self._save_settings()
         task = dlg.result
         if task is None:
             return
-        assign_output_paths(task)
+        assign_output_paths(task, reserved_outputs(self.tasks, task))
         self.tasks.append(task)
         self._rebuild_rows()
         self.list.scroll_to_bottom()
@@ -700,12 +775,17 @@ class MainWindow:
         else:
             self.engine.prefetch_durations([task])
 
+    def _output_dirs(self) -> set[str]:
+        """Теки результатів усіх завдань — їх не скануємо як вихідні відео."""
+        return {task.out_dir for task in self.tasks if task.out_dir}
+
     def edit_task(self, task: Task):
         if task.is_active:
             messagebox.showinfo(t("Редагування"),
                                 t("Спершу зупиніть конвертування цього завдання."), parent=self.root)
             return
-        dlg = TaskDialog(self.root, self.presets, self.settings, task)
+        dlg = TaskDialog(self.root, self.presets, self.settings, task,
+                         known_out_dirs=self._output_dirs())
         self.root.wait_window(dlg)
         self._save_settings()
         result = dlg.result
@@ -719,8 +799,9 @@ class MainWindow:
         task.preset_name = result.preset_name
         if task.status == TASK_DONE and any(f.status != FILE_DONE for f in task.files):
             task.status = TASK_IDLE
-        assign_output_paths(task)
+        assign_output_paths(task, reserved_outputs(self.tasks, task))
         self._rebuild_rows()
+        self.rows[task.id].reload()
         self._schedule_save()
         self.engine.prefetch_durations([task])
         self.log(t("Завдання «{name}» змінено.").format(name=task.name), "info")

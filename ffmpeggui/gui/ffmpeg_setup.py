@@ -122,7 +122,7 @@ class DownloadDialog(tk.Toplevel):
 
 
 class InstructionsDialog(tk.Toplevel):
-    def __init__(self, master, error: str = ""):
+    def __init__(self, master, error: str = "", allow_download: bool = True):
         super().__init__(master)
         self.title(t("Встановлення ffmpeg"))
         self.transient(master)
@@ -145,7 +145,8 @@ class InstructionsDialog(tk.Toplevel):
         ttk.Button(btns, text=t("Відкрити сторінку завантаження"),
                    command=lambda: webbrowser.open(ffmpeg_tools.MANUAL_PAGES[0])).pack(side="left")
         ttk.Button(btns, text=t("Відкрити теку bin"), command=self._open_bin).pack(side="left", padx=4)
-        ttk.Button(btns, text=t("Завантажити автоматично"), command=self._retry).pack(side="left")
+        if allow_download:
+            ttk.Button(btns, text=t("Завантажити автоматично"), command=self._retry).pack(side="left")
         ttk.Button(btns, text=t("Закрити"), command=self.destroy).pack(side="right")
         ttk.Button(btns, text=t("Перевірити знову"), command=self._check).pack(side="right", padx=4)
         _center(self, master)
@@ -175,6 +176,23 @@ def ensure_ffmpeg(parent, log, reason: str = "") -> bool:
     """Повертає True, якщо ffmpeg доступний (за потреби пропонує встановити)."""
     if ffmpeg_tools.ffmpeg_available():
         return True
+    if not paths.bin_dir_writable():
+        # Завантаження однаково впало б — одразу пояснюємо причину.
+        log(t("Тека програми недоступна для запису: {path}").format(path=paths.app_dir()), "warn")
+        messagebox.showwarning(
+            t("Немає доступу до теки програми"),
+            (f"{reason}\n\n" if reason else "") + t(
+                "Програма лежить у теці, куди Windows не дозволяє записувати без прав "
+                "адміністратора:\n{path}\n\n"
+                "Так буває, наприклад, у «Program Files». Через це ffmpeg не вдасться "
+                "завантажити автоматично.\n\n"
+                "Перенесіть теку з програмою в інше місце (наприклад, у «Документи») або "
+                "скопіюйте ffmpeg.exe та ffprobe.exe у теку bin вручну від імені адміністратора."
+            ).format(path=paths.app_dir()),
+            parent=parent)
+        ins = InstructionsDialog(parent, allow_download=False)
+        parent.wait_window(ins)
+        return ffmpeg_tools.ffmpeg_available()
     text = (f"{reason}\n\n" if reason else "") + t(
         "Не знайдено ffmpeg.exe та ffprobe.exe у теці:\n"
         "{path}\n\n"

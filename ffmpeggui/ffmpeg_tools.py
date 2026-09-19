@@ -237,9 +237,34 @@ def build_command(src: str, dst: str, s: ConvSettings, info: ProbeInfo) -> list[
     if s.faststart and s.container in ("mp4", "mov"):
         cmd += ["-movflags", "+faststart"]
     if s.extra_args.strip():
-        cmd += shlex.split(s.extra_args)
+        cmd += split_args(s.extra_args)
     cmd.append(dst)
     return cmd
+
+
+def split_args(text: str) -> list[str]:
+    """Розбиває рядок параметрів за правилами командного рядка Windows.
+
+    shlex.split працює за правилами Linux, де «\\» — службовий символ, і псує
+    шляхи на кшталт C:\\subs\\a.srt. Тому на Windows користуємося системною
+    функцією CommandLineToArgvW — саме так рядок розібрав би сам Windows.
+    """
+    if os.name != "nt":
+        return shlex.split(text)
+    import ctypes
+    from ctypes import wintypes
+    parse = ctypes.windll.shell32.CommandLineToArgvW
+    parse.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    parse.restype = ctypes.POINTER(wintypes.LPWSTR)
+    count = ctypes.c_int()
+    # Перше слово Windows розбирає як ім'я програми (за іншими правилами) — підставляємо заглушку.
+    argv = parse("x " + text, ctypes.byref(count))
+    if not argv:
+        raise ValueError(text)
+    try:
+        return [argv[i] for i in range(1, count.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree(argv)
 
 
 def start_process(cmd: list[str]) -> subprocess.Popen:

@@ -227,6 +227,19 @@ EN: dict[str, str] = {
         '4. Press "Check again".\n\n'
         'You do not need to install ffmpeg system-wide or change PATH — the program\n'
         'only uses the files in the bin folder next to itself.',
+    'Немає доступу до теки програми': 'No access to the program folder',
+    'Тека програми недоступна для запису: {path}': 'The program folder is not writable: {path}',
+    'Програма лежить у теці, куди Windows не дозволяє записувати без прав адміністратора:\n{path}\n\n'
+    'Так буває, наприклад, у «Program Files». Через це ffmpeg не вдасться завантажити '
+    'автоматично.\n\n'
+    'Перенесіть теку з програмою в інше місце (наприклад, у «Документи») або скопіюйте '
+    'ffmpeg.exe та ffprobe.exe у теку bin вручну від імені адміністратора.':
+        'The program is located in a folder Windows does not allow writing to without '
+        'administrator rights:\n{path}\n\n'
+        'This happens, for example, in "Program Files". Because of that ffmpeg cannot be '
+        'downloaded automatically.\n\n'
+        'Move the program folder somewhere else (for example to "Documents"), or copy '
+        'ffmpeg.exe and ffprobe.exe into the bin folder manually as an administrator.',
     'Завантаження ffmpeg': 'Downloading ffmpeg',
     'Встановлення ffmpeg': 'Installing ffmpeg',
     'Підготовка…': 'Preparing…',

@@ -30,6 +30,7 @@ from .models import (
     ConvSettings,
     Task,
     assign_output_paths,
+    reserved_outputs,
 )
 from .timing import file_elapsed, format_duration, task_elapsed
 
@@ -178,7 +179,7 @@ class Engine:
             f.finished_at = 0.0
             f.fps = 0.0
             f.speed = 0.0
-        assign_output_paths(task)
+        assign_output_paths(task, reserved_outputs(self.tasks, task))
         task.status = TASK_QUEUED
         # Час завдання рахуємо від старту його першого файлу (_launch), а не від
         # постановки в чергу — інакше після «Запустити всі» всі завдання мали б один час.

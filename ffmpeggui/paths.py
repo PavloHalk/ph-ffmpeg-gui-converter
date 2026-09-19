@@ -39,6 +39,23 @@ def ffprobe_exe() -> str:
     return os.path.join(bin_dir(), "ffprobe.exe")
 
 
+def bin_dir_writable() -> bool:
+    """Чи можна записувати в теку bin.
+
+    Якщо програма лежить, наприклад, у Program Files, Windows не дозволяє туди
+    писати без прав адміністратора — тоді ffmpeg не завантажити автоматично.
+    """
+    try:
+        os.makedirs(bin_dir(), exist_ok=True)
+        probe = os.path.join(bin_dir(), ".write_test")
+        with open(probe, "w", encoding="utf-8"):
+            pass
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
 def data_dir() -> str:
     """%APPDATA%\FFMpegGuiConverter — пресети, черга, налаштування, журнал."""
     global _data_dir

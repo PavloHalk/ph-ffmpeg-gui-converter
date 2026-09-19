@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -26,7 +25,7 @@ from ..models import (
     effective_settings,
 )
 from ..store import PresetStore
-from .widgets import Collapsible, ScrollableFrame, ToolTip, hint
+from .widgets import Collapsible, ScrollableFrame, ToolTip, hint, safe_geometry
 
 FPS_VALUES = ["23.976", "24", "25", "29.97", "30", "48", "50", "59.94", "60"]
 BITRATE_VALUES = ["96", "128", "160", "192", "256", "320"]
@@ -53,15 +52,17 @@ def _labels(options):
 
 class TaskDialog(tk.Toplevel):
     def __init__(self, master, presets: PresetStore, app_settings: dict,
-                 task: Task | None = None, default_name: str = "Завдання"):
+                 task: Task | None = None, default_name: str = "Завдання",
+                 known_out_dirs: set[str] | None = None):
         super().__init__(master)
         self.presets = presets
         self.app_settings = app_settings
         self.task = task
+        self.known_out_dirs = known_out_dirs or set()
         self.result: Task | None = None
         self.title(t("Редагування завдання") if task else t("Нове завдання"))
         self.transient(master)
-        self.geometry(self.app_settings.get("dialog_geometry") or "1240x780")
+        self.geometry(safe_geometry(self.app_settings.get("dialog_geometry"), "1240x780"))
         self.minsize(1000, 600)
 
         if task:
@@ -591,13 +592,15 @@ class TaskDialog(tk.Toplevel):
             return
         folder = os.path.abspath(folder)
         self.app_settings["last_dir"] = folder
-        out_dir = os.path.normcase(os.path.abspath(self.v_out.get().strip())) if self.v_out.get().strip() else None
+        # Теки з результатами (цього та інших завдань) не скануємо — інакше в список
+        # потраплять уже сконвертовані файли.
+        skip = {os.path.normcase(os.path.abspath(d))
+                for d in self.known_out_dirs | {self.v_out.get().strip()} if d}
         found = []
         if self.v_recursive.get():
             for root, dirs, files in os.walk(folder):
                 # Не скануємо теку з результатами, щоб не додати вже готові файли.
-                dirs[:] = [d for d in dirs
-                           if os.path.normcase(os.path.join(root, d)) != out_dir and d.lower() != "h264_master"]
+                dirs[:] = [d for d in dirs if os.path.normcase(os.path.join(root, d)) not in skip]
                 dirs.sort(key=str.lower)
                 for name in sorted(files, key=str.lower):
                     found.append(os.path.join(root, name))
@@ -782,7 +785,7 @@ class TaskDialog(tk.Toplevel):
         s.extra_args = self.v_extra.get().strip()
         if s.extra_args:
             try:
-                shlex.split(s.extra_args)
+                ffmpeg_tools.split_args(s.extra_args)
             except ValueError as exc:
                 raise ValueError(t("Поле «Додаткові параметри ffmpeg»: {error}").format(error=exc)) from None
         return s

@@ -2,12 +2,43 @@
 
 from __future__ import annotations
 
+import os
+import re
 import tkinter as tk
 from tkinter import ttk
 
 from ..i18n import t
 
 HINT_COLOR = "#555555"
+
+
+def safe_geometry(saved: str | None, default: str) -> str:
+    """Збережені розмір і позиція вікна, якщо вікно буде видно на екрані.
+
+    Якщо монітор, на якому вікно було востаннє, відключили, позицію відкидаємо
+    й лишаємо тільки розмір — тоді Windows сама поставить вікно на видимий екран.
+    """
+    m = re.fullmatch(r"(\d+)x(\d+)([+-])(-?\d+)([+-])(-?\d+)", (saved or "").strip())
+    if not m:
+        return default
+    width, height = int(m[1]), int(m[2])
+    x = int(m[4]) if m[3] == "+" else -int(m[4])
+    y = int(m[6]) if m[5] == "+" else -int(m[6])
+    size = f"{width}x{height}"
+    if os.name != "nt":
+        return saved
+    try:
+        import ctypes
+        from ctypes import wintypes
+        monitor_from_point = ctypes.windll.user32.MonitorFromPoint
+        monitor_from_point.argtypes = [wintypes.POINT, wintypes.DWORD]
+        monitor_from_point.restype = wintypes.HANDLE
+        # Точка в заголовку вікна: за нього вікно можна перетягнути.
+        point = wintypes.POINT(x + min(width // 2, 200), y + 10)
+        on_screen = bool(monitor_from_point(point, 0))   # 0 = MONITOR_DEFAULTTONULL
+    except (AttributeError, OSError):
+        return saved
+    return saved if on_screen else size
 
 
 def hint(parent, text: str, wrap: int = 400) -> ttk.Label:
