@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from .models import FILE_DONE, FILE_PENDING, FILE_RUNNING, FileItem, Task
+from .models import FILE_DONE, FILE_ERROR, FILE_PENDING, FILE_RUNNING, FileItem, Task
 
 
 def format_duration(seconds: float | None) -> str:
@@ -84,10 +84,64 @@ def task_eta(task: Task, now: float | None = None, parallel: int = 1) -> float |
     return None
 
 
+def _weights(files: list[FileItem]) -> list[float]:
+    """Вага файлу для загального прогресу — тривалість відео.
+
+    Файлам, чия тривалість ще невідома (або не визначилась), даємо середню
+    тривалість решти; якщо невідома жодна — усі файли важать однаково.
+    """
+    known = [f.duration for f in files if f.duration > 0]
+    average = sum(known) / len(known) if known else 1.0
+    return [f.duration if f.duration > 0 else average for f in files]
+
+
+def queue_progress(tasks: list[Task]) -> float:
+    """Частка виконаної роботи в усьому списку завдань (0..1).
+
+    Рахується за тривалістю відео, а не за кількістю файлів: інакше відсоток
+    повзе разом із поточним файлом і стрибає на коротких. Враховуються всі
+    завдання списку, незалежно від того, що зараз запущено.
+    """
+    files = [f for task in tasks for f in task.files]
+    if not files:
+        return 0.0
+    total = done = 0.0
+    for f, weight in zip(files, _weights(files)):
+        total += weight
+        if f.status in (FILE_DONE, FILE_ERROR):
+            done += weight
+        elif f.status == FILE_RUNNING:
+            done += weight * f.progress
+    return done / total if total else 0.0
+
+
 def queue_eta(tasks: list[Task], now: float | None = None, parallel: int = 1) -> float | None:
-    """Сума оцінок по всіх завданнях, які ще мають необроблені файли."""
+    """Скільки ще триватиме вся черга — усі завдання «В черзі» та «Конвертується».
+
+    Відео, що лишилось у всіх цих завданнях, ділимо на сумарну поточну швидкість
+    процесів ffmpeg. Завдання, які ще чекають своєї черги, теж враховуються.
+    """
     now = now or time.time()
-    values = [task_eta(t, now, parallel) for t in tasks
-              if any(f.status in (FILE_PENDING, FILE_RUNNING) for f in t.files)]
-    known = [v for v in values if v is not None]
-    return sum(known) if known else None
+    active = [t for t in tasks if t.is_active]
+    running = [f for t in active for f in t.files if f.status == FILE_RUNNING]
+    pending = [f for t in active for f in t.files if f.status == FILE_PENDING]
+    if not running and not pending:
+        return None
+
+    speed = sum(f.speed for f in running if f.speed > 0)
+    if speed > 0:
+        files = running + pending
+        weights = _weights(files)
+        remaining = sum(w * max(0.0, 1.0 - f.progress) if f.status == FILE_RUNNING else w
+                        for f, w in zip(files, weights))
+        return remaining / speed
+
+    # Швидкість ще невідома (ffmpeg тільки стартував) — за середнім часом на файл.
+    finished = [f for t in tasks for f in t.files
+                if f.status == FILE_DONE and f.started_at and f.finished_at]
+    if finished:
+        average = sum(file_elapsed(f) for f in finished) / len(finished)
+        remaining_files = len(pending) + sum(max(0.0, 1.0 - f.progress) for f in running)
+        workers = max(1, min(parallel, len(running) or 1))
+        return remaining_files * average / workers
+    return None

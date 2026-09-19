@@ -75,10 +75,10 @@ EN: dict[str, str] = {
         'as the current files finish.',
     'Що буде, якщо змінити це значення під час конвертації?':
         'What happens if you change this value during conversion?',
-    'Частка сконвертованих файлів серед усіх файлів у списку завдань — незалежно від того, '
-    'що саме зараз запущено.':
-        'Share of converted files among all files in the task list — no matter what is '
-        'running right now.',
+    'Скільки роботи виконано з усього списку завдань, незалежно від того, що саме зараз '
+    'запущено. Рахується за тривалістю відео, тож довгий файл важить більше за короткий.':
+        'How much of the work in the whole task list is done, no matter what is running right '
+        'now. It is measured by video duration, so a long file weighs more than a short one.',
     'Згорнути або розгорнути журнал, щоб звільнити місце для завдань':
         'Collapse or expand the log to free up room for the task list',
     'Зберегти вміст журналу у файл .log': 'Save the log contents to a .log file',
@@ -139,8 +139,9 @@ EN: dict[str, str] = {
         '{app} {version} started. Settings and queue: {path}',
     'Помилка': 'Error',
     'Журнал збережено у файл: {path}': 'Log saved to file: {path}',
-    'Сконвертовано {processed} з {total} файлів ({percent}%)':
-        'Converted {processed} of {total} files ({percent}%)',
+    'Сконвертовано {processed} з {total} файлів  ·  виконано {percent}%':
+        'Converted {processed} of {total} files  ·  {percent}% done',
+    'до кінця черги ~{time}': '~{time} until the queue is done',
     'Додано завдання «{name}». Файлів: {count}.': 'Task "{name}" added. Files: {count}.',
     'Завдання «{name}» змінено.': 'Task "{name}" updated.',
     'Повторна конвертація': 'Convert again',

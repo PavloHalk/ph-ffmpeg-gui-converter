@@ -30,7 +30,8 @@ from ..models import (
     assign_output_paths,
     queue_stats,
 )
-from ..timing import file_elapsed, file_eta, format_duration, queue_eta, task_elapsed, task_eta
+from ..timing import (file_elapsed, file_eta, format_duration, queue_eta, queue_progress,
+                      task_elapsed, task_eta)
 from ..version import APP_NAME, APP_TITLE, AUTHOR, VERSION_DATE, __version__
 from .ffmpeg_setup import ensure_ffmpeg
 from .task_dialog import TaskDialog
@@ -428,8 +429,9 @@ class MainWindow:
         self.queue_pb.pack(side="left", padx=6)
         self.lbl_queue = ttk.Label(line2, text="")
         self.lbl_queue.pack(side="left")
-        ToolTip(self.queue_pb, t("Частка сконвертованих файлів серед усіх файлів у списку завдань — "
-                                 "незалежно від того, що саме зараз запущено."))
+        ToolTip(self.queue_pb, t("Скільки роботи виконано з усього списку завдань, незалежно від того, "
+                                 "що саме зараз запущено. Рахується за тривалістю відео, тож довгий "
+                                 "файл важить більше за короткий."))
 
     def _build_body(self):
         self.paned = ttk.PanedWindow(self.root, orient="vertical")
@@ -635,21 +637,22 @@ class MainWindow:
             self.root.after(150, self._poll)
 
     def _update_indicators(self):
-        stats = queue_stats(self.tasks)
+        stats = queue_stats(self.tasks)          # лічильники файлів
+        percent = queue_progress(self.tasks) * 100  # виконана робота — за тривалістю відео
         if stats.total:
-            title = f"{stats.percent:.0f}% ({stats.processed}/{stats.total}) — {APP_TITLE}"
-            text = t("Сконвертовано {processed} з {total} файлів ({percent}%)").format(
-                processed=stats.processed, total=stats.total, percent=f"{stats.percent:.0f}")
+            title = f"{percent:.0f}% ({stats.processed}/{stats.total}) — {APP_TITLE}"
+            text = t("Сконвертовано {processed} з {total} файлів  ·  виконано {percent}%").format(
+                processed=stats.processed, total=stats.total, percent=f"{percent:.0f}")
             if stats.errors:
                 text += "  ·  " + t("помилок: {count}").format(count=stats.errors)
-            if stats.running:
-                eta = queue_eta(self.tasks, parallel=self.max_parallel())
-                if eta is not None:
-                    text += "  ·  " + t("залишилось ~{time}").format(time=format_duration(eta))
+            eta = queue_eta(self.tasks, parallel=self.max_parallel())
+            if eta is not None:
+                text += "  ·  " + t("до кінця черги ~{time}").format(time=format_duration(eta))
         else:
             title = f"{APP_TITLE} {__version__}"
             text = t("Черга порожня")
-        self.queue_pb["value"] = stats.percent
+            percent = 0.0
+        self.queue_pb["value"] = percent
         self.lbl_queue.configure(text=text)
         if title != self._title:
             self._title = title

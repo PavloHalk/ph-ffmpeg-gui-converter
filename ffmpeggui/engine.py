@@ -180,7 +180,9 @@ class Engine:
             f.speed = 0.0
         assign_output_paths(task)
         task.status = TASK_QUEUED
-        task.started_at = time.time()
+        # Час завдання рахуємо від старту його першого файлу (_launch), а не від
+        # постановки в чергу — інакше після «Запустити всі» всі завдання мали б один час.
+        task.started_at = 0.0
         task.finished_at = 0.0
         self.log(t("Завдання «{name}» додано в чергу. Файлів: {count}.").format(
             name=task.name, count=len(targets)), "info")
